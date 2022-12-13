@@ -10,7 +10,7 @@ function toWei(ether) {
 describe("NFT lending", function () {
   // deploy without other operations
   async function deployFixture() {
-    const [owner, user, user2] = await ethers.getSigners();
+    const [owner, user, user2, user3, user4] = await ethers.getSigners();
 
     const simplePriceOracleFactory = await ethers.getContractFactory("SimplePriceOracle")
     simplePriceOracle = await simplePriceOracleFactory.deploy()
@@ -28,7 +28,7 @@ describe("NFT lending", function () {
     cEth = await cEthFactory.deploy(interestRateModel.address, comptroller.address)
     await cEth.deployed()
 
-    return { comptroller, cEth, owner, user, user2 };
+    return { comptroller, cEth, owner, user, user2, user3, user4, simplePriceOracle };
   }
 
   // deploy and add cEth to market
@@ -115,69 +115,159 @@ describe("NFT lending", function () {
     });
   });
 
-  describe("Borrow", function () {
-  //   describe("Validations", function () {
-  //     it("Should revert with the right error if called too soon", async function () {
-  //       const { lock } = await loadFixture(deployOneYearLockFixture);
+  describe("Borrow", function() {
+    const baycAddress = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
+    const baycTokenId = 12
+    const baycOwnerAddress = "0x50EF16A9167661DC2500DDde8f83937C1ba4CD5f"
+    const binanceAddress = '0x28C6c06298d514Db089934071355E5743bf21d60'
+    let comptroller, cEth, owner, user, user2, user3, user4, cNft, bayc, simplePriceOracle
+    before(async function() {
+      // provide 100 ETH to cETH pool
+      ({ comptroller, cEth, owner, user, user2, user3, user4, simplePriceOracle } = await loadFixture(deployFixture))
+      const ethLiquidityAmount = toWei(100)
+      await comptroller.supportMarket(cEth.address)
+      await cEth.mint({value: ethLiquidityAmount})
+      expect(await cEth.balanceOf(owner.address)).to.equal(ethLiquidityAmount)
+      expect(await cEth.totalSupply()).to.equal(ethLiquidityAmount)
 
-  //       await expect(lock.withdraw()).to.be.revertedWith(
-  //         "You can't withdraw yet"
-  //       );
-  //     });
+      // get BAYC NFT
+      bayc = await ethers.getContractAt("ERC721", baycAddress);
 
-  //     it("Should revert with the right error if called from another account", async function () {
-  //       const { lock, unlockTime, otherAccount } = await loadFixture(
-  //         deployOneYearLockFixture
-  //       );
+      // deploy cBAYC NFT
+      const cNftFactory = await ethers.getContractFactory("cErc721")
+      cNft = await cNftFactory.deploy("comp BAYC", "cBAYC", baycAddress, comptroller.address)
+      await cNft.deployed()
+    })
+    
+    it ("Revert if market not list", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await expect(cNft.connect(baycSigner).mint(baycTokenId)).to.be.revertedWith("Comptroller: nft market not listed")
+    })
 
-  //       // We can increase the time in Hardhat Network
-  //       await time.increaseTo(unlockTime);
+    it ("Mint cNft successfully", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await comptroller.supportNftMarket(cNft.address)
+      await bayc.connect(baycSigner).approve(cNft.address, baycTokenId)
+      await expect(cNft.connect(baycSigner).mint(baycTokenId))
+      .emit(cNft, "Mint")
+      .withArgs(baycOwnerAddress, baycTokenId)
 
-  //       // We use lock.connect() to send a transaction from another account
-  //       await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-  //         "You aren't the owner"
-  //       );
-  //     });
+      expect(await bayc.ownerOf(baycTokenId)).to.equal(cNft.address)
+      expect(await cNft.ownerOf(baycTokenId)).to.equal(baycOwnerAddress)
+    })
 
-  //     it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-  //       const { lock, unlockTime } = await loadFixture(
-  //         deployOneYearLockFixture
-  //       );
+    it ("Enter market with BAYC#12", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await expect(comptroller.connect(baycSigner).enterMarkets([cNft.address]))
+      .emit(comptroller, "MarketEntered")
+      .withArgs(cNft.address, baycOwnerAddress)
+    })
 
-  //       // Transactions are sent using the first signer by default
-  //       await time.increaseTo(unlockTime);
+    it ("Borrow failed if amount exceeds collateral amounts", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await simplePriceOracle.setNftPrice(cNft.address, toWei(89776.19))
+      await simplePriceOracle.setUnderlyingPrice(cEth.address, toWei(1273.06))
+      
+      await cNft.connect(baycSigner).setApprovalForAll(cEth.address, true)
+      await expect(cEth.connect(baycSigner).borrow(toWei(36))).to.be.reverted
+    })
 
-  //       await expect(lock.withdraw()).not.to.be.reverted;
-  //     });
-  //   });
+    it ("Borrow successfully", async function() {
+      const borrowAmount = toWei(10)
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      
+      await cNft.connect(baycSigner).setApprovalForAll(cEth.address, true)
+      await expect(cEth.connect(baycSigner).borrow(borrowAmount))
+      .emit(cEth, "Borrow")
+      .withArgs(baycOwnerAddress, borrowAmount, borrowAmount, borrowAmount)
+      .to.changeEtherBalance(baycOwnerAddress, borrowAmount)
+    })
 
-  //   describe("Events", function () {
-  //     it("Should emit an event on withdrawals", async function () {
-  //       const { lock, unlockTime, lockedAmount } = await loadFixture(
-  //         deployOneYearLockFixture
-  //       );
+    it ("Repay successfully", async function() {
+      const repayAmount = toWei(5)
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      const binanceSigner = await ethers.getImpersonatedSigner(binanceAddress)
+      
+      await expect(cEth.connect(baycSigner).repayBorrow({value: repayAmount}))
+      .emit(cEth, "RepayBorrow")
+      .withArgs(baycOwnerAddress, baycOwnerAddress, repayAmount, toWei(5), toWei(5))
+      .to.changeEtherBalance(baycOwnerAddress, -repayAmount)
+      .to.changeEtherBalance(cEth.address, repayAmount)
 
-  //       await time.increaseTo(unlockTime);
+      await expect(cEth.connect(binanceSigner).repayBorrowBehalf(baycOwnerAddress, {value: repayAmount}))
+      .emit(cEth, "RepayBorrow")
+      .withArgs(binanceAddress, baycOwnerAddress, repayAmount, 0, 0)
+      .to.changeEtherBalance(binanceAddress, -repayAmount)
+      .to.changeEtherBalance(cEth.address, repayAmount)
+    })
 
-  //       await expect(lock.withdraw())
-  //         .to.emit(lock, "Withdrawal")
-  //         .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-  //     });
-  //   });
+    it ("Liquidate and start auction successfully", async function() {
+      const borrowAmount = toWei(30)
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      
+      await cEth.connect(baycSigner).borrow(borrowAmount)
 
-  //   describe("Transfers", function () {
-  //     it("Should transfer the funds to the owner", async function () {
-  //       const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
-  //         deployOneYearLockFixture
-  //       );
+      await simplePriceOracle.setNftPrice(cNft.address, toWei(70018.30))
 
-  //       await time.increaseTo(unlockTime);
+      await expect(cEth.connect(user2).mint({value: toWei(80)}))
+      .to.emit(cEth, "Mint")
 
-  //       await expect(lock.withdraw()).to.changeEtherBalances(
-  //         [owner, lock],
-  //         [lockedAmount, -lockedAmount]
-  //       );
-  //     });
-  //   });
+      const cEthBalance = await cEth.balanceOf(user2.address)
+
+      await cEth.connect(user2).approve(cEth.address, toWei(1000))
+      await expect(cEth.connect(user2).liquidateBorrow(baycOwnerAddress, cEthBalance, cNft.address, baycTokenId))
+      .emit(cEth, "LiquidateBorrow")
+      .withArgs(user2.address, baycOwnerAddress, cEthBalance, cNft.address)
+      .emit(cEth, "AuctionStart")
+      .withArgs(cNft.address, baycTokenId, user2.address, cEthBalance)
+
+      // NFT collatoral has transferred to cNft
+      expect(await cNft.balanceOf(cNft.address)).to.equal(1)
+      expect(await cNft.balanceOf(baycOwnerAddress)).to.equal(0)
+
+      let auction = await cEth.auctions(cNft.address, baycTokenId)
+      expect(auction[0]).is.equal(user2.address)
+      expect(auction[1]).is.equal(cEthBalance)
+    })
+
+    it ("user3 attend auction successfully", async function() {
+      const bidAmount = toWei(90)
+      
+      let previousAuction = await cEth.auctions(cNft.address, baycTokenId)
+      await cEth.connect(user3).mint({value: bidAmount})
+      await expect(cEth.connect(user3).bidNftAuction(cNft.address, baycTokenId, bidAmount))
+      .to.changeTokenBalances(
+        cEth,
+        [user2.address, user3.address],
+        [previousAuction.amount, "-90000000000000000000"]
+      )
+      .to.emit(cEth, "AuctionBid")
+      .withArgs(cNft.address, baycTokenId, user3.address, bidAmount);
+    })
+
+    it ("user4 attend auction and claim NFT successfully", async function() {
+      const bidAmount = toWei(95)
+      
+      let previousAuction = await cEth.auctions(cNft.address, baycTokenId)
+      await cEth.connect(user4).mint({value: bidAmount})
+      await expect(cEth.connect(user4).bidNftAuction(cNft.address, baycTokenId, bidAmount))
+      .to.changeTokenBalances(
+        cEth,
+        [user3.address, user4.address],
+        [previousAuction.amount, "-95000000000000000000"]
+      )
+      .to.emit(cEth, "AuctionBid")
+      .withArgs(cNft.address, baycTokenId, user4.address, bidAmount)
+
+      await ethers.provider.send("evm_increaseTime", [1 * 24 * 60 * 60]); // 1 day
+      await expect(cEth.connect(user4).claimAuction(cNft.address, baycTokenId))
+      .emit(cNft, "Redeem")
+      .withArgs(user4.address, baycTokenId)
+
+      // cNft burned
+      await expect(cNft.ownerOf(baycTokenId)).to.be.reverted
+      // Nft claim successfully
+      expect(await bayc.ownerOf(baycTokenId)).to.equal(user4.address)
+    })
   });
 });
