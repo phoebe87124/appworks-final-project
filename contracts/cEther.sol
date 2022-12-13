@@ -297,6 +297,7 @@ contract cEther is ERC20("cEther", "cETH"), ExponentialNoError, ReentrancyGuard 
     
     // Lock repay tokens for init Auction
     (bool success) = transfer(address(this), _repayToken);
+    require(success, "cEther: repay tokens failed");
 
     // transfer borrower's all Collaterals to cErc721
     cErc721[] memory collaterals = comptroller.getAccountAssets(_borrower);
