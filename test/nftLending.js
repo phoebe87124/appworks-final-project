@@ -217,7 +217,7 @@ describe("NFT lending", function () {
       await cEth.connect(user2).approve(cEth.address, toWei(1000))
       await expect(cEth.connect(user2).liquidateBorrow(baycOwnerAddress, cEthBalance, cNft.address, baycTokenId))
       .emit(cEth, "LiquidateBorrow")
-      .withArgs(user2.address, baycOwnerAddress, cEthBalance, cNft.address)
+      .withArgs(user2.address, baycOwnerAddress, cEthBalance, cNft.address, baycTokenId)
       .emit(cEth, "AuctionStart")
       .withArgs(cNft.address, baycTokenId, user2.address, cEthBalance)
 

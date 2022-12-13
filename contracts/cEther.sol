@@ -14,9 +14,9 @@ contract cEther is ERC20("cEther", "cETH"), ExponentialNoError, ReentrancyGuard 
   event Redeem(address redeemer, uint redeemAmount, uint redeemTokens);
   event Borrow(address borrower, uint borrowAmount, uint accountBorrowsNew, uint totalBorrowsNew);
   event RepayBorrow(address payer, address borrower, uint actualRepayAmount, uint accountBorrowsNew, uint totalBorrowsNew);
-  event LiquidateBorrow(address _liquidator, address _borrower, uint _repayToken, address _cNftCollateral);
-  event AuctionStart(address _nftCollateral, uint _tokenId, address _bidder, uint _bidAmount);
-  event AuctionBid(address _nftCollateral, uint _tokenId, address _bidder, uint _bidAmount);
+  event LiquidateBorrow(address liquidator, address borrower, uint repayToken, address cNftCollateral, uint tokenId);
+  event AuctionStart(address nftCollateral, uint tokenId, address bidder, uint bidAmount);
+  event AuctionBid(address nftCollateral, uint tokenId, address bidder, uint bidAmount);
 
   struct BorrowSnapshot {
     uint principal;
@@ -295,6 +295,13 @@ contract cEther is ERC20("cEther", "cETH"), ExponentialNoError, ReentrancyGuard 
     require(accrualBlockNumber == getBlockNumber(), "cEther: Wrong Block Number");
     require(_borrower != _liquidator, "cEther: can not liquidate yourself");
     
+    // update borrow
+    uint accountBorrowsPrev = borrowBalanceStoredInternal(_borrower);
+    uint totalBorrowsNew = totalBorrows - accountBorrowsPrev;
+
+    delete accountBorrows[_borrower];
+    totalBorrows = totalBorrowsNew;
+
     // Lock repay tokens for init Auction
     (bool success) = transfer(address(this), _repayToken);
     require(success, "cEther: repay tokens failed");
@@ -319,7 +326,7 @@ contract cEther is ERC20("cEther", "cETH"), ExponentialNoError, ReentrancyGuard 
       }
     }
 
-    emit LiquidateBorrow(_liquidator, _borrower, _repayToken, address(_cNftCollateral));
+    emit LiquidateBorrow(_liquidator, _borrower, _repayToken, address(_cNftCollateral), _tokenId);
   }
 
   function startNftAuction(address _nftCollateral, uint _tokenId, address _bidder, uint _bidAmount) internal {
