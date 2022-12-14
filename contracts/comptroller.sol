@@ -78,7 +78,29 @@ contract Comptroller is Ownable, ExponentialNoError {
     }
 
     /* Otherwise, perform a hypothetical liquidity check to guard against shortfall */
-    (uint err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(redeemer, ICToken(cToken), redeemTokens, 0);
+    (uint err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(redeemer, ICToken(cToken), redeemTokens, cErc721(address(0)), 0, 0);
+    if (err != 0) {
+      return err;
+    }
+    if (shortfall > 0) {
+      return 4;
+    }
+
+    return 0;
+  }
+
+  function redeemNftAllowed(address cNft, uint tokenId, address redeemer) external view returns (uint) {
+    if (!nftMarkets[cNft].isListed) {
+      return 9;
+    }
+
+    /* If the redeemer is not 'in' the market, then we can bypass the liquidity check */
+    if (!nftMarkets[cNft].accountMembership[redeemer]) {
+      return 0;
+    }
+
+    /* Otherwise, perform a hypothetical liquidity check to guard against shortfall */
+    (uint err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(redeemer, ICToken(address(0)), 0, cErc721(cNft), tokenId, 0);
     if (err != 0) {
       return err;
     }
@@ -98,7 +120,7 @@ contract Comptroller is Ownable, ExponentialNoError {
       return 13;
     }
 
-    (uint err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(borrower, ICToken(cToken), 0, borrowAmount);
+    (uint err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(borrower, ICToken(cToken), 0, cErc721(address(0)), 0, borrowAmount);
     if (err != 0) {
       return err;
     }
@@ -262,21 +284,24 @@ contract Comptroller is Ownable, ExponentialNoError {
   }
 
   function getAccountLiquidity(address account) public view returns (uint, uint, uint) {
-    (uint err, uint liquidity, uint shortfall) = getHypotheticalAccountLiquidityInternal(account, ICToken(address(0)), 0, 0);
+    (uint err, uint liquidity, uint shortfall) = getHypotheticalAccountLiquidityInternal(account, ICToken(address(0)), 0, cErc721(address(0)), 0, 0);
 
     return (err, liquidity, shortfall);
   }
 
   function getAccountLiquidityInternal(address account) internal view returns (uint, uint, uint) {
-    return getHypotheticalAccountLiquidityInternal(account, ICToken(address(0)), 0, 0);
+    return getHypotheticalAccountLiquidityInternal(account, ICToken(address(0)), 0, cErc721(address(0)), 0, 0);
   }
 
   function getHypotheticalAccountLiquidityInternal(
     address account,
     ICToken cTokenModify,
     uint redeemTokens,
+    cErc721 redeemNftAddress,
+    uint redeemNftTokenId,
     uint borrowAmount
   ) internal view returns (uint, uint, uint) {
+    redeemNftTokenId;
 
     AccountLiquidityLocalVars memory vars; // Holds all our calculation results
     uint oErr;
@@ -290,6 +315,11 @@ contract Comptroller is Ownable, ExponentialNoError {
       (oErr, vars.cNftBalance) = asset.getAccountSnapshot(account);
       if (oErr != 0) { // semi-opaque error code, we assume NO_ERROR == 0 is invariant between upgrades
         return (15, 0, 0);
+      }
+
+      // redeem effect
+      if (redeemNftAddress == asset) {
+        vars.cNftBalance--;
       }
       
       vars.collateralFactor = Exp({mantissa: nftMarkets[address(asset)].collateralFactorMantissa});

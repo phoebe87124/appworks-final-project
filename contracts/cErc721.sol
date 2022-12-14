@@ -36,11 +36,10 @@ contract cErc721 is ERC721Enumerable {
   }
 
   function redeem(uint _tokenId) external {
-    // require(_to == msg.sender, "cERC721: minter mismatch");
-    // ERC721(underlyingAddress).safeTransferFrom(address(this), _to, _tokenId);
-    // _burn(_tokenId);
+    require(ownerOf(_tokenId) == msg.sender, "cERC721: not NFT owner");
+    require(comptroller.redeemNftAllowed(address(this), _tokenId, msg.sender) == 0, "Comptroller: redeem is not allowed");
 
-    // emit Redeem(_to, _tokenId);
+    redeemFresh(msg.sender, _tokenId);
   }
 
   function redeemFresh(address _to, uint _tokenId) internal {
@@ -51,7 +50,7 @@ contract cErc721 is ERC721Enumerable {
   }
 
   function claim(address _to, uint _tokenId) external {
-    require(comptroller.claimAllowed(msg.sender, _to, _tokenId) == 0, "comptroller: claim not allowed");
+    require(comptroller.claimAllowed(msg.sender, _to, _tokenId) == 0, "Comptroller: claim is not allowed");
 
     redeemFresh(_to, _tokenId);
   }

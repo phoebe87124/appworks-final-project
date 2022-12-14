@@ -270,4 +270,103 @@ describe("NFT lending", function () {
       expect(await bayc.ownerOf(baycTokenId)).to.equal(user4.address)
     })
   });
+
+
+  describe("Redeem with different scenario", function() {
+    const baycAddress = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
+    const baycTokenId = 12
+    const baycOwnerAddress = "0x50EF16A9167661DC2500DDde8f83937C1ba4CD5f"
+    const binanceAddress = '0x28C6c06298d514Db089934071355E5743bf21d60'
+    let comptroller, cEth, owner, user, user2, user3, user4, cNft, bayc, simplePriceOracle
+    beforeEach(async function() {
+      // provide 100 ETH to cETH pool
+      ({ comptroller, cEth, owner, user, user2, user3, user4, simplePriceOracle } = await loadFixture(deployFixture))
+      const ethLiquidityAmount = toWei(100)
+      await comptroller.supportMarket(cEth.address)
+      await cEth.mint({value: ethLiquidityAmount})
+      expect(await cEth.balanceOf(owner.address)).to.equal(ethLiquidityAmount)
+      expect(await cEth.totalSupply()).to.equal(ethLiquidityAmount)
+
+      // get BAYC NFT
+      bayc = await ethers.getContractAt("ERC721", baycAddress);
+
+      // deploy cBAYC NFT
+      const cNftFactory = await ethers.getContractFactory("cErc721")
+      cNft = await cNftFactory.deploy("comp BAYC", "cBAYC", baycAddress, comptroller.address)
+      await cNft.deployed()
+
+      // mint cNft and enter market with BAYC#12
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await comptroller.supportNftMarket(cNft.address)
+      await bayc.connect(baycSigner).approve(cNft.address, baycTokenId)
+      await cNft.connect(baycSigner).mint(baycTokenId)
+
+      // init NFT & ETH price
+      await simplePriceOracle.setNftPrice(cNft.address, toWei(89776.19))
+      await simplePriceOracle.setUnderlyingPrice(cEth.address, toWei(1273.06))
+    })
+
+    it ("Redeem without entering market", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      await expect(cNft.connect(baycSigner).redeem(baycTokenId))
+      .to.emit(cNft, "Redeem")
+      .withArgs(baycOwnerAddress, baycTokenId)
+
+      // redeem successfully
+      await expect(cNft.ownerOf(baycTokenId)).to.be.reverted
+      expect(await bayc.ownerOf(baycTokenId)).to.be.equal(baycOwnerAddress)
+    })
+
+    it ("Redeem after enter market", async function() {
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+
+      await comptroller.connect(baycSigner).enterMarkets([cNft.address])
+
+      await expect(cNft.connect(baycSigner).redeem(baycTokenId))
+      .to.emit(cNft, "Redeem")
+      .withArgs(baycOwnerAddress, baycTokenId)
+
+      // redeem successfully
+      await expect(cNft.ownerOf(baycTokenId)).to.be.reverted
+      expect(await bayc.ownerOf(baycTokenId)).to.be.equal(baycOwnerAddress)
+    })
+
+    it ("Redeem after borrow, fail with insufficient collaterals", async function() {
+      const borrowAmount = toWei(30)
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+      
+      await comptroller.connect(baycSigner).enterMarkets([cNft.address])
+      await cNft.connect(baycSigner).setApprovalForAll(cEth.address, true)
+      await expect(cEth.connect(baycSigner).borrow(borrowAmount))
+      .emit(cEth, "Borrow")
+      .withArgs(baycOwnerAddress, borrowAmount, borrowAmount, borrowAmount)
+      .to.changeEtherBalance(baycOwnerAddress, borrowAmount)
+
+      await expect(cNft.connect(baycSigner).redeem(baycTokenId)).to.be.revertedWith("Comptroller: redeem is not allowed")
+    })
+
+    it ("Redeem after borrow, success with insufficient collaterals", async function() {
+      const borrowAmount = toWei(30)
+      const baycSigner = await ethers.getImpersonatedSigner(baycOwnerAddress)
+
+      const baycTokenId2 = 2240
+      await bayc.connect(baycSigner).approve(cNft.address, baycTokenId2)
+      await cNft.connect(baycSigner).mint(baycTokenId2)
+      
+      await comptroller.connect(baycSigner).enterMarkets([cNft.address])
+      await cNft.connect(baycSigner).setApprovalForAll(cEth.address, true)
+      await expect(cEth.connect(baycSigner).borrow(borrowAmount))
+      .emit(cEth, "Borrow")
+      .withArgs(baycOwnerAddress, borrowAmount, borrowAmount, borrowAmount)
+      .to.changeEtherBalance(baycOwnerAddress, borrowAmount)
+
+      await expect(cNft.connect(baycSigner).redeem(baycTokenId))
+      .to.emit(cNft, "Redeem")
+      .withArgs(baycOwnerAddress, baycTokenId)
+
+      // redeem successfully
+      await expect(cNft.ownerOf(baycTokenId)).to.be.reverted
+      expect(await bayc.ownerOf(baycTokenId)).to.be.equal(baycOwnerAddress)
+    })
+  });
 });
